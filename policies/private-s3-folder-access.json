@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+      "Sid": "AllowGroupToSeeBucketList",
+      "Action": ["s3:ListAllMyBuckets", "s3:GetBucketLocation"],
+      "Effect": "Allow",
+      "Resource": ["arn:aws:s3:::*"]
+    }, {
+      "Sid": "AllowHomeLevelList",
+      "Action": ["s3:ListBucket"],
+      "Effect": "Allow",
+      "Resource": ["arn:aws:s3:::corp-fs-team-bucket"],
+      "Condition": {
+        "StringEquals": {
+          "s3:prefix": ["", "home/"],
+          "s3:delimiter": ["/"]
+        }
+      }
+    }, {
+      "Sid": "AllowListForUserPrefix",
+      "Action": ["s3:ListBucket"],
+      "Effect": "Allow",
+      "Resource": ["arn:aws:s3:::corp-fs-team-bucket"],
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["home/${aws:username}/*"]
+        }
+      }
+    }, {
+      "Sid": "AllowUserFullAccessToUserPrefix",
+      "Action": ["s3:*"],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::corp-fs-team-bucket/home/${aws:username}",
+        "arn:aws:s3:::corp-fs-team-bucket/home/${aws:username}/*"
+      ]
+    }
+  ]
+}
