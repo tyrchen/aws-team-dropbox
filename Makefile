@@ -7,9 +7,14 @@ ACCOUNT_ID=$(shell aws iam get-user $(PROFILE) | awk '/arn:aws:/{print $2}' | eg
 
 POLICY_FOLDER=policies
 POLICY_PREFIX=it
-POLICY_FILES=$(shell find policies -name "user-*.json")
-POLICIES=$(POLICY_FILES:$(POLICY_FOLDER)/%.json=$(POLICY_PREFIX)-%)
-POLICY_ARNS=$(POLICY_FILES:$(POLICY_FOLDER)/%.json=policy/$(POLICY_PREFIX)-%)
+
+USER_POLICY_FILES=$(shell find policies -name "user-*.json")
+USER_POLICIES=$(USER_POLICY_FILES:$(POLICY_FOLDER)/%.json=$(POLICY_PREFIX)-%)
+USER_POLICY_ARNS=$(USER_POLICY_FILES:$(POLICY_FOLDER)/%.json=policy/$(POLICY_PREFIX)-%)
+
+RESOURCE_S3_PREFIX=resource-s3
+RESOURCE_S3_POLICY_FILES=$(shell find policies -name "$(RESOURCE_S3_PREFIX)-*.json")
+RESOURCE_S3_POLICIES=$(RESOURCE_S3_POLICY_FILES:$(POLICY_FOLDER)/$(RESOURCE_S3_PREFIX)-%.json=%)
 
 
 GROUP_NAME=corp-user
@@ -73,9 +78,9 @@ init-user-folder:
 create-group:
 	@echo Creating group: $(GROUP_NAME)...
 	-@aws iam create-group --group-name corp-user $(PROFILE)
-	@echo Attaching policies: $(POLICY_ARNS)...
+	@echo Attaching policies: $(USER_POLICY_ARNS)...
 	$(eval POLICY_ARN_PREFIX:=arn:aws:iam::$(ACCOUNT_ID))
-	@$(foreach ARN, $(POLICY_ARNS), aws iam attach-group-policy --group-name corp-user --policy-arn $(POLICY_ARN_PREFIX):$(ARN) $(PROFILE);)
+	@$(foreach ARN, $(USER_POLICY_ARNS), aws iam attach-group-policy --group-name corp-user --policy-arn $(POLICY_ARN_PREFIX):$(ARN) $(PROFILE);)
 
 
 ## S3 bucket and folders initialization
@@ -98,17 +103,22 @@ sync-web-bucket:
 	@aws s3 sync s3website s3://$(S3_WEB_BUCKET) $(PROFILE)
 
 ## policy initialization
-create-policy: $(POLICIES)
+create-policy: $(USER_POLICIES) $(RESOURCE_S3_POLICIES)
 
-update-policy: $(POLICY_ARNS)
+update-policy: $(USER_POLICY_ARNS)
 
-$(POLICY_ARNS):policy/$(POLICY_PREFIX)-%:$(POLICY_FOLDER)/%.json
+$(USER_POLICY_ARNS):policy/$(POLICY_PREFIX)-%:$(POLICY_FOLDER)/%.json
 	$(eval POLICY_ARN_PREFIX:=arn:aws:iam::$(ACCOUNT_ID))
 	@echo Updating policy $(POLICY_ARN_PREFIX):$@ with file $<
 	@aws iam create-policy-version --policy-arn $(POLICY_ARN_PREFIX):$@ --policy-document file://$< --set-as-default $(PROFILE)
 
-$(POLICIES):$(POLICY_PREFIX)-%:$(POLICY_FOLDER)/%.json
+$(USER_POLICIES):$(POLICY_PREFIX)-%:$(POLICY_FOLDER)/%.json
 	@echo Creating policy $@ with file $<
-	@aws iam create-policy --policy-name $@ --policy-document file://$< $(PROFILE)
+	-@aws iam create-policy --policy-name $@ --policy-document file://$< $(PROFILE)
+
+$(RESOURCE_S3_POLICIES):$(RESOURCE_S3_PREFIX)-%:$(POLICY_FOLDER)/$(RESOURCE_S3_PREFIX)-%.json
+	$(eval POLICY_FILE:=$(POLICY_FOLDER)/$(RESOURCE_S3_PREFIX)-$@.json)
+	@echo Updating policy for S3 bucket $@ with file $(POLICY_FILE)
+	@aws s3api put-bucket-policy --bucket $@ --policy file://$(POLICY_FILE) $(PROFILE)
 
 ## lambda initialization
