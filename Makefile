@@ -1,12 +1,16 @@
 PROFILE=$(AWSP) # if you want to use a different profile, set env variable AWSP=--profile <profile name>
-ACCOUNT_ID:=$(shell aws iam get-user $(PROFILE) | awk '/arn:aws:/{print $2}' | egrep -o '[0-9]+')
+OUTPUT_TEXT=--output text
+OUTPUT_TABLE=--output table
+
+# extract account id from current user ARN
+ACCOUNT_ID=$(shell aws iam get-user $(PROFILE) | awk '/arn:aws:/{print $2}' | egrep -o '[0-9]+')
 
 POLICY_FOLDER=policies
-POLICY_PREFIX=it-user
-POLICY_FILES=$(shell find policies -name *.json)
+POLICY_PREFIX=it
+POLICY_FILES=$(shell find policies -name "user-*.json")
 POLICIES=$(POLICY_FILES:$(POLICY_FOLDER)/%.json=$(POLICY_PREFIX)-%)
 POLICY_ARNS=$(POLICY_FILES:$(POLICY_FOLDER)/%.json=policy/$(POLICY_PREFIX)-%)
-POLICY_ARN_PREFIX=arn:aws:iam::$(ACCOUNT_ID)
+
 
 GROUP_NAME=corp-user
 INIT_PASS=hell0World
@@ -23,8 +27,9 @@ EMPTY_FILE=empty-file.txt
 usage:
 	@echo list of commands: create-group, create-user, create-policy, update-policy
 
+## User creation related
 create-user:
-	@echo Creating user: "$(username)"...
+	@echo Creating user: $(username)...
 	@aws iam create-user --user-name $(username) $(PROFILE)
 	@echo Adding user to group $(GROUP_NAME)...
 	@aws iam add-user-to-group --user-name $(username) --group-name $(GROUP_NAME) $(PROFILE)
@@ -34,6 +39,33 @@ create-user:
 	@aws iam create-access-key --user-name $(username) $(PROFILE)
 	make init-user-folder username=$(username)
 
+delete-user: delete-test-user delete-user-from-group delete-user-login-profile delete-user-access-key delete-user-home-folder
+	@echo Deleting user: $(username)...
+	@aws iam delete-user --user-name $(username) $(PROFILE)
+
+delete-test-user:
+	@while [ -z "$$CONTINUE" ]; do \
+		read -r -p "Are you sure to delete user $(username)? [y/N]: " CONTINUE; \
+	done ; \
+	[ $$CONTINUE = "y" ] || [ $$CONTINUE = "Y" ] || (echo "Exiting."; exit 1;)
+
+delete-user-from-group:
+	@echo Removing user $(username) from group $(GROUP_NAME)...
+	@aws iam remove-user-from-group --user-name $(username) --group-name $(GROUP_NAME) $(PROFILE)
+
+delete-user-login-profile:
+	@echo Deleting login profile for user $(username)...
+	-@aws iam delete-login-profile --user-name $(username) $(PROFILE)
+
+delete-user-access-key:
+	@echo Deleting access key for user $(username)...
+	$(eval KEYS:=$(shell aws iam list-access-keys --user-name $(username) $(PROFILE) $(OUTPUT_TEXT) | awk '{print $$2}'))
+	$(foreach KEY, $(KEYS), aws iam delete-access-key --user-name $(username) --access-key-id $(KEY) $(PROFILE);)
+
+delete-user-home-folder:
+	@echo Deleting home folder...
+	@aws s3 rm s3://$(S3_TEAM_BUCKET)/home/$(username) --recursive $(PROFILE)
+
 init-user-folder:
 	@echo Creating home folder...
 	@$(foreach DIR, $(S3_FOLDERS), aws s3 cp $(ASSET_FOLDER)/$(EMPTY_FILE) s3://$(S3_TEAM_BUCKET)/$(DIR)/$(username)/$(EMPTY_FILE) $(PROFILE);)
@@ -41,9 +73,12 @@ init-user-folder:
 create-group:
 	@echo Creating group: $(GROUP_NAME)...
 	-@aws iam create-group --group-name corp-user $(PROFILE)
+	@echo Attaching policies: $(POLICY_ARNS)...
+	$(eval POLICY_ARN_PREFIX:=arn:aws:iam::$(ACCOUNT_ID))
 	@$(foreach ARN, $(POLICY_ARNS), aws iam attach-group-policy --group-name corp-user --policy-arn $(POLICY_ARN_PREFIX):$(ARN) $(PROFILE);)
 
 
+## S3 bucket and folders initialization
 init-s3: init-team-bucket init-web-bucket
 
 init-team-bucket:
@@ -62,15 +97,18 @@ sync-web-bucket:
 	@echo uploading files to bucket $(S3_WEB_BUCKET)...
 	@aws s3 sync s3website s3://$(S3_WEB_BUCKET) $(PROFILE)
 
+## policy initialization
 create-policy: $(POLICIES)
 
 update-policy: $(POLICY_ARNS)
 
 $(POLICY_ARNS):policy/$(POLICY_PREFIX)-%:$(POLICY_FOLDER)/%.json
-	@echo Updating policy $@ with file $<
+	$(eval POLICY_ARN_PREFIX:=arn:aws:iam::$(ACCOUNT_ID))
+	@echo Updating policy $(POLICY_ARN_PREFIX):$@ with file $<
 	@aws iam create-policy-version --policy-arn $(POLICY_ARN_PREFIX):$@ --policy-document file://$< --set-as-default $(PROFILE)
 
 $(POLICIES):$(POLICY_PREFIX)-%:$(POLICY_FOLDER)/%.json
 	@echo Creating policy $@ with file $<
 	@aws iam create-policy --policy-name $@ --policy-document file://$< $(PROFILE)
 
+## lambda initialization
